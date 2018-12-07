@@ -1,0 +1,5 @@
+.sonarqube
+.vscode
+coverage-html
+coverage.json
+coverage-hits.txt
