@@ -25,10 +25,13 @@ namespace JoinPDF
         {
             // join two pdf's in one (using byte[])
             JoinPDF joinPdf = new JoinPDF();            
-            byte[] joined = joinPdf.Join(File.ReadAllBytes("pdfJoin/p1_signed.pdf"), File.ReadAllBytes("pdfJoin/p2_signed.pdf"));
+            byte[] joined = joinPdf.Join(File.ReadAllBytes("pdfJoin/p1.pdf"), File.ReadAllBytes("pdfJoin/p2.pdf"));
+
+            byte[] joined2 = joinPdf.Join(joinPdf.Join(joined, File.ReadAllBytes("pdfJoin/p2.pdf")), File.ReadAllBytes("pdfJoin/p2.pdf"));
 
             // and write it out!
-            File.WriteAllBytes("pdfJoin/p1_p2_final_signed.pdf", joined);
+            File.WriteAllBytes("pdfJoin/p1_p2_final.pdf", joined);
+            File.WriteAllBytes("pdfJoin/p1_p2_final2.pdf", joined2);
         }
     }
 }

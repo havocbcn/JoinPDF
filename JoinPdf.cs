@@ -119,7 +119,7 @@ namespace JoinPDF
         private void WriteXRefIndex(MemoryStream output, int elementsWritten)
         {
             output.WriteByte(10);   // \n
-            byte[] textByte = System.Text.ASCIIEncoding.ASCII.GetBytes("0 " + elementsWritten);
+            byte[] textByte = System.Text.ASCIIEncoding.ASCII.GetBytes("0 " + (elementsWritten + 1));
             output.Write(textByte, 0, textByte.Length);
         }
 
@@ -242,16 +242,12 @@ namespace JoinPDF
                                 // 5
                                 // 0
                                 // R
-                                //parts[i] = dctXref2[Convert.ToInt32(parts[i])].newId.ToString();
                                 newText = replacerPDFNumbers(newText, Convert.ToInt32(parts[i]), dctXref2[Convert.ToInt32(parts[i])].newId);
-                                //newText = newText.Replace(parts[i] + " 0 R", dctXref2[Convert.ToInt32(parts[i])].newId.ToString() + " 0 R");
                             }
                             else
                             {
                                 number = parts[i].Substring(j+1);
-                                //parts[i] = parts[i].Substring(0, j) + dctXref2[Convert.ToInt32(number)].newId.ToString();
                                 newText = replacerPDFNumbers(newText, Convert.ToInt32(number), dctXref2[Convert.ToInt32(number)].newId);
-                                //newText = newText.Replace(number + " 0 R", dctXref2[Convert.ToInt32(number)].newId.ToString() + " 0 R");
                             }
                         }
                         i++;
@@ -349,7 +345,6 @@ namespace JoinPDF
         {
             // |--TEXT--||- optional binary-||--TEXT-..-|            
             // OBJ.......STREAM......ENDSTREM.TEXT.ENDOBJ
-
             uint startIndex = item.Value.pos;
             uint startTextIndex = startIndex;
             uint currentIndex = startIndex;            
@@ -482,7 +477,7 @@ namespace JoinPDF
                 count++;
             }
 
-            return xrefStartPointer + 4 + count * 3;
+            return xrefStartPointer + 2 + count * 3;
         }
 
         private string GetString(byte[] pdf, uint startByte, uint endByte)
