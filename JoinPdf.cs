@@ -15,7 +15,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 
 namespace JoinPDF
 {
@@ -81,7 +83,7 @@ namespace JoinPDF
                     if (lowerT.Contains("/type") 
                         && lowerT.Contains("/catalog") 
                         && lowerT.Contains("/pages") )
-                        return item.Key;
+                        return item.Value.newId;
                 }
             }
 
@@ -267,10 +269,11 @@ namespace JoinPDF
                 }
                 else
                 {
-                    byte[] rv = new byte[lstByte[0].Length + lstByte[1].Length + item.Value.streamContent.Length];
+                    byte[] rv = new byte[lstByte[0].Length + lstByte[1].Length + item.Value.streamContent.Length + 1];
                     System.Buffer.BlockCopy(lstByte[0], 0, rv, 0, lstByte[0].Length);
-                    System.Buffer.BlockCopy(item.Value.streamContent, 0, rv, lstByte[0].Length, item.Value.streamContent.Length);
-                    System.Buffer.BlockCopy(lstByte[1], 0, rv, lstByte[0].Length + item.Value.streamContent.Length, lstByte[1].Length);
+                    rv[lstByte[0].Length] = (byte)'\n';
+                    System.Buffer.BlockCopy(item.Value.streamContent, 0, rv, lstByte[0].Length + 1, item.Value.streamContent.Length);                    
+                    System.Buffer.BlockCopy(lstByte[1], 0, rv, lstByte[0].Length + 1 + item.Value.streamContent.Length, lstByte[1].Length);
 
                     item.Value.content = rv;
                 }                
@@ -287,7 +290,7 @@ namespace JoinPDF
             int i = newText.IndexOf(" 0 R");
             while (i > 0)
             {
-                int number = GetReferenceNumber(newText, i);
+                int number = GetReferenceNumberBackwards(newText, i);
                 if (number == v1)
                 {
                     newText = newText.Substring(0, i-number.ToString().Length) + v2 + newText.Substring(i);
@@ -302,7 +305,24 @@ namespace JoinPDF
             return newText;
         }
 
-        private int GetReferenceNumber(string newText, int i)
+        private int GetReferenceNumberBackwards(byte[] pdf, int i)
+        {
+            string newText = "";
+
+            // I'm looking for 123 0 R, i points to the space between 3 and 0
+            int endIndex = i;   // endindex points to the space
+            i--;               // now points at 3
+            while (pdf[i] >= '0' && pdf[i] <= '9' && i > 0)
+            {
+                newText = pdf[i] + newText;
+                i--;
+            }            
+            
+            // returns the number            
+            return Convert.ToInt32(newText);
+        }
+
+         private int GetReferenceNumberBackwards(string newText, int i)
         {
             // I'm looking for 123 0 R, i points to the space between 3 and 0
             int endIndex = i;   // endindex points to the space
@@ -315,6 +335,21 @@ namespace JoinPDF
             
             // returns the number            
             return Convert.ToInt32(newText.Substring(startIndex, endIndex-startIndex));
+        }
+
+        private int GetReferenceNumberForward(byte[] pdf, uint i)
+        {
+            int offset = (int)i;
+            // I'm looking for 123 0 R, i points to 1
+            string newText = "";
+            while (pdf[offset] >= '0' && pdf[offset] <= '9' && offset > 0)
+            {
+                newText += (char)pdf[offset];
+                offset++;
+            }
+            
+            // returns the number            
+            return Convert.ToInt32(newText);
         }
 
         private int AssignNewIndex(Dictionary<int, XrefItem> Xrefs, int startIndex)
@@ -334,14 +369,21 @@ namespace JoinPDF
 
         private void ReadAllContent(byte[] pdf1, Dictionary<int, XrefItem> dctXref1)
         {
+            List<XrefItem> newItems = new List<XrefItem>();
+            
             foreach (KeyValuePair <int, XrefItem> item in dctXref1)
             {
                 if (item.Value.IsUsed)
-                    ReadContent(pdf1, item);
+                    ReadContent(pdf1, item, newItems);
+            }
+
+            foreach (XrefItem newItem in newItems)
+            {
+                dctXref1.Add(newItem.id, newItem);
             }
         }
 
-        private void ReadContent(byte[] pdf, KeyValuePair<int, XrefItem> item)
+        private void ReadContent(byte[] pdf, KeyValuePair<int, XrefItem> item, List<XrefItem> newItems)
         {
             // |--TEXT--||- optional binary-||--TEXT-..-|            
             // OBJ.......STREAM......ENDSTREM.TEXT.ENDOBJ
@@ -352,18 +394,24 @@ namespace JoinPDF
 
             while (continueWorking)
             {
-                if (pdf[currentIndex] == 's' &&
-                    pdf[currentIndex+1] == 't' &&
-                    pdf[currentIndex+2] == 'r' &&
-                    pdf[currentIndex+3] == 'e' &&
-                    pdf[currentIndex+4] == 'a' &&
-                    pdf[currentIndex+5] == 'm')
+                if (currentIndex + 5 < pdf.Length &&
+                    pdf[currentIndex] == 's' &&
+                    pdf[currentIndex + 1] == 't' &&
+                    pdf[currentIndex + 2] == 'r' &&
+                    pdf[currentIndex + 3] == 'e' &&
+                    pdf[currentIndex + 4] == 'a' &&
+                    pdf[currentIndex + 5] == 'm')
                 {
                     currentIndex += 6;                    
 
                     item.Value.text.Add(GetString(pdf, startTextIndex, currentIndex));                    
 
                     uint startStream = currentIndex;
+
+                    if (pdf[startStream] == '\r' && pdf[startStream+1] == '\n')
+                        startStream += 2;
+                    else if (pdf[startStream] == '\n')
+                        startStream ++;
 
                     string dictionary = GetString(pdf, startIndex, startStream);
                     string[] parts = dictionary.Split(separator, StringSplitOptions.RemoveEmptyEntries);
@@ -389,7 +437,8 @@ namespace JoinPDF
                     item.Value.streamContent = pdf.Slice(startStream, endStream);
                 }
 
-                if (pdf[currentIndex] == 'e' &&
+                if (currentIndex + 5 < pdf.Length &&
+                    pdf[currentIndex] == 'e' &&
                     pdf[currentIndex+1] == 'n' &&
                     pdf[currentIndex+2] == 'd' &&
                     pdf[currentIndex+3] == 'o' &&
@@ -401,54 +450,462 @@ namespace JoinPDF
                 }
                 else
                     currentIndex++;
+
+                if (currentIndex >= pdf.Length)
+                    continueWorking = false;
             }
 
             item.Value.text.Add(GetString(pdf, startTextIndex, currentIndex));
+
+
+            // ObjStm
+            // 10 0 obj
+            // <</Filter/FlateDecode/First 94/Length 773/N 13/Type/ObjStm>>stream
+            // 11 0 12 547 13 665    <- num obj, offset, num obj, offset...
+            // << obj1 >>
+            // << obj2 >>
+            // ...
+            // endstream endobj
+            if (item.Value.text[0].Contains("/ObjStm"))
+            {
+                item.Value.IsUsed = false;
+
+                string[] partsXrefStream = item.Value.text[0].Split(separator, StringSplitOptions.RemoveEmptyEntries);
+                int i = 0;
+                uint? streamLength = null;
+                uint FirstElementOffset = 0;
+                uint NumberOfElements = 0;       
+                string filter;                    
+
+                while (i < partsXrefStream.Length)
+                {
+                    if (partsXrefStream[i] == "Length")
+                    {
+                        streamLength = Convert.ToUInt32(partsXrefStream[i+1]);
+                    }
+
+                    if (partsXrefStream[i] == "First")
+                    {
+                        FirstElementOffset = Convert.ToUInt32(partsXrefStream[i+1]);
+                    }
+
+                    if (partsXrefStream[i] == "N")
+                    {
+                        NumberOfElements = Convert.ToUInt32(partsXrefStream[i+1]);
+                    }
+
+                    if (partsXrefStream[i] == "Filter")
+                    {
+                        filter = partsXrefStream[i+1];
+                        if (filter != "FlateDecode")
+                        {
+                            throw new Exception("only flatedecode filter implemented, but " + filter + " found");
+                        }
+                    }
+
+                    i++;
+                }
+
+                
+                byte[] deflated = Deflate(item.Value.streamContent, 1 ,0);
+                string preamble = GetString(deflated, 0, FirstElementOffset);
+                string[] preambleParts = preamble.Split(separator, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (int subitemUsed in item.Value.stmobjUsed)
+                {
+                    uint offset = Convert.ToUInt32(preambleParts[subitemUsed*2+1]) + FirstElementOffset;
+                    uint offsetContinuous;
+                    int objectIndex = Convert.ToInt32(preambleParts[subitemUsed*2]);
+                    if (subitemUsed < NumberOfElements-1)
+                        offsetContinuous = Convert.ToUInt32(preambleParts[(subitemUsed+1)*2+1]) + FirstElementOffset;
+                    else
+                        offsetContinuous = (uint)deflated.Length;
+
+                    XrefItem newItem = new XrefItem() {
+                            id = objectIndex,
+                            pos = 0,
+                            IsUsed = true
+                        };  
+                    
+                    newItems.Add(newItem);
+
+                    ReadContent(deflated.Slice(offset, offsetContinuous), new KeyValuePair<int, XrefItem>(
+                        objectIndex, newItem), newItems);
+
+                    newItem.text[0] = objectIndex.ToString() + " 0 obj\n" + newItem.text[0] + "\nendobj";
+                }
+            }
         }
 
         public char[] separator = { (char)0, (char)9, (char)10, (char)12, (char)13, (char)32
-                                    , (char)'[', (char)']', (char)'/' };
+                                    , (char)'[', (char)']', (char)'/', (char)'>' };
 
         private void ReadXRef(byte[] pdf, Dictionary<int, XrefItem> Xref)
         {
-            uint trailerIndex = (uint)pdf.Length - 7; 
-
-            while (pdf[trailerIndex] != 't' ||
-                    pdf[trailerIndex + 1] != 'r' ||
-                    pdf[trailerIndex + 2] != 'a' ||
-                    pdf[trailerIndex + 3] != 'i' ||
-                    pdf[trailerIndex + 4] != 'l' ||
-                    pdf[trailerIndex + 5] != 'e' ||
-                    pdf[trailerIndex + 6] != 'r')
-            {
-                trailerIndex--;
-
-                if (trailerIndex == 0)
-                    throw new Exception("PDF trailer not found");
-            }
-
-            string trailer = GetString(pdf, trailerIndex, (uint)pdf.Length);
-            string[] parts = trailer.Split(separator, StringSplitOptions.RemoveEmptyEntries);
-
             // PDF ends:
             // startxref
-            // 6424     <- parts[parts.length - 2] = XRefPosition
-            // %%EOF    <- parts[parts.length - 1]
+            // 6424     <- XRefPosition : cross reference table or stream
+            // %%EOF    
+            uint startXRefIndex = (uint)pdf.Length - 10; 
+
+            while (pdf[startXRefIndex] != 's' ||
+                    pdf[startXRefIndex + 1] != 't' ||
+                    pdf[startXRefIndex + 2] != 'a' ||
+                    pdf[startXRefIndex + 3] != 'r' ||
+                    pdf[startXRefIndex + 4] != 't' ||
+                    pdf[startXRefIndex + 5] != 'x' ||
+                    pdf[startXRefIndex + 6] != 'r' ||
+                    pdf[startXRefIndex + 7] != 'e' ||
+                    pdf[startXRefIndex + 8] != 'f')
+            {
+                startXRefIndex--;
+
+                if (startXRefIndex == 0)
+                    throw new Exception("PDF startxref not found");
+            }
+
+            string trailer = GetString(pdf, startXRefIndex, (uint)pdf.Length);
+            string[] parts = trailer.Split(separator, StringSplitOptions.RemoveEmptyEntries);            
             uint XrefPos = Convert.ToUInt32(parts[parts.Length - 2]);
 
-            // Xref = Cross reference table            
-            string xref = GetString(pdf, XrefPos, trailerIndex);
-            parts = xref.Split(separator, StringSplitOptions.RemoveEmptyEntries);
+            if (pdf[XrefPos] == 'x')    
+            {
+                // Xref = Cross reference table            
+                string xref = GetString(pdf, XrefPos, startXRefIndex);
+                parts = xref.Split(separator, StringSplitOptions.RemoveEmptyEntries);
 
-            if (parts[0] != "xref")
-                throw new Exception("no xref table found");
+                if (parts[0] != "xref")
+                    throw new Exception("no xref table found");
 
-            int XRefIndex = 1;
-            while (XRefIndex < parts.Length)
-                XRefIndex = ReadXrefTable(parts, XRefIndex, Xref);
+                int XRefIndex = 1;
+                while (XRefIndex < parts.Length)
+                    XRefIndex = ReadXrefTable(pdf, parts, XRefIndex, Xref);
+            } 
+            else
+            {
+                ReadXRefStream(pdf, Xref, XrefPos);
+
+            }
         }
 
-        private int ReadXrefTable(string[] parts, int xrefStartPointer, Dictionary<int, XrefItem> Xref)
+        private void ReadXRefStream(byte[] pdf, Dictionary<int, XrefItem> Xref, uint XrefPos)
+        {
+            // cross-reference stream
+
+            // 12 0 obj        % Cross-reference stream
+            // << /Type /XRef  % Cross-reference stream dictionary
+            //     /Size ...
+            //     /Root ...
+            //     >>
+            // stream
+            // ... 
+            // Stream data containing cross-reference information ... 
+            // endstream
+            // endobj
+            bool continueWorking = true;
+            uint currentIndex = XrefPos;
+            int predictor = 1;
+            while (continueWorking)
+            {
+                if (currentIndex >= pdf.Length - 5)
+                    throw new Exception("xref stream table ends abruptly");
+
+                if (pdf[currentIndex] == 's' &&
+                    pdf[currentIndex + 1] == 't' &&
+                    pdf[currentIndex + 2] == 'r' &&
+                    pdf[currentIndex + 3] == 'e' &&
+                    pdf[currentIndex + 4] == 'a' &&
+                    pdf[currentIndex + 5] == 'm')
+                {
+                    currentIndex += 6;
+                    uint startStream = currentIndex;
+
+                    if (pdf[startStream] == '\r' && pdf[startStream + 1] == '\n')
+                        startStream += 2;
+                    else if (pdf[startStream] == '\n')
+                        startStream++;
+
+                    string dictionary = GetString(pdf, XrefPos, startStream);
+                    string[] partsXrefStream = dictionary.Split(separator, StringSplitOptions.RemoveEmptyEntries);
+                    int i = 0;
+                    uint? streamLength = null;
+                    int w1 = 1;
+                    int w2 = 1;
+                    int w3 = 1;
+                    int size = 1;
+                    uint prev;
+                    string filter;
+
+                    List<int> indexArray = new List<int>();
+
+                    while (i < partsXrefStream.Length)
+                    {
+                        if (partsXrefStream[i] == "Length")
+                        {
+                            streamLength = Convert.ToUInt32(partsXrefStream[i + 1]);
+                        }
+
+                        if (partsXrefStream[i] == "W")
+                        {
+                            w1 = Convert.ToInt16(partsXrefStream[i + 1]);
+                            w2 = Convert.ToInt16(partsXrefStream[i + 2]);
+                            w3 = Convert.ToInt16(partsXrefStream[i + 3]);
+                        }
+
+                        if (partsXrefStream[i] == "Index")
+                        {
+                            int j = i + 1;
+                            int num;
+                            while (Int32.TryParse(partsXrefStream[j], out num))
+                            {
+                                indexArray.Add(num);
+                                j++;
+                            }
+                        }
+
+                        if (partsXrefStream[i] == "Size")
+                        {
+                            size = Convert.ToInt16(partsXrefStream[i + 1]);
+                        }
+
+                        if (partsXrefStream[i] == "Predictor")
+                        {
+                            predictor = Convert.ToInt16(partsXrefStream[i + 1]);
+                        }
+
+                        if (partsXrefStream[i] == "Prev")
+                        {
+                            prev = Convert.ToUInt32(partsXrefStream[i + 1]);
+                            ReadXRefStream(pdf, Xref, prev);
+                        }
+
+                        if (partsXrefStream[i] == "Filter")
+                        {
+                            filter = partsXrefStream[i + 1];
+                            if (filter != "FlateDecode")
+                            {
+                                throw new Exception("only flatedecode filter implemented, but " + filter + " found");
+                            }
+                        }
+
+                        i++;
+                    }
+
+                    if (indexArray.Count == 0)
+                    {
+                        indexArray.Add(0);
+                        indexArray.Add(size);
+                    }
+
+                    if (streamLength == null)
+                        throw new Exception("stream without length definition");
+
+                    uint endStream = startStream + streamLength.Value;
+                    currentIndex = endStream + 9;   // 9 = endstream text length
+
+                    byte[] stream = pdf.Slice(startStream, endStream);
+                    byte[] deflated = Deflate(stream, predictor, w1 + w2 + w3);
+
+                    int deflatedIndex = 0;
+                    int elementIndex = 0;
+                    List<StmObjSubItem> lstObjStm = new List<StmObjSubItem>();
+                    for (int indexArrayIndex = 0; indexArrayIndex < indexArray.Count; indexArrayIndex += 2)
+                    {
+                        i = indexArray[indexArrayIndex];
+                        for (int j = 0; j < indexArray[indexArrayIndex + 1]; j++)
+                        {
+                            uint type = GetUInt(deflated, w1, ref deflatedIndex, 1);
+                            uint value2 = GetUInt(deflated, w2, ref deflatedIndex, 0);
+                            uint value3 = GetUInt(deflated, w3, ref deflatedIndex, 0);
+
+                            // type 0 => free item, they are ignored
+                            // type 1 object is in position value2, with generation value3
+                            if (type == 1)
+                            {
+                                XrefItem item = new XrefItem()
+                                {
+                                    id = GetReferenceNumberForward(pdf, value2),
+                                    pos = value2,
+                                    IsUsed = true
+                                };
+
+                                Xref.Add(item.id, item);
+                            }
+
+                            // type 2 object is in position value2, with generation value3
+                            else if (type == 2)
+                            {
+                                StmObjSubItem item = new StmObjSubItem()
+                                {
+                                    StmObjId = (int)value2,
+                                    Position = (int)value3
+                                };
+
+                                lstObjStm.Add(item);
+                            }
+
+                            elementIndex++;
+                        }
+                    }
+
+                    // mark in stmobj whose are used
+                    foreach (StmObjSubItem item in lstObjStm)
+                    {
+                        Xref[item.StmObjId].stmobjUsed.Add(item.Position);
+                    }
+
+                    break;
+                }
+
+                if (pdf[currentIndex] == 'e' &&
+                    pdf[currentIndex + 1] == 'n' &&
+                    pdf[currentIndex + 2] == 'd' &&
+                    pdf[currentIndex + 3] == 'o' &&
+                    pdf[currentIndex + 4] == 'b' &&
+                    pdf[currentIndex + 5] == 'j')
+                {
+                    throw new Exception("xref stream without stream");
+                }
+                else
+                    currentIndex++;
+            }
+        }
+
+        private uint GetUInt(byte[] deflated, int w1, ref int deflatedIndex, uint def)
+        {
+            uint value;
+            if (w1 == 0)
+            {
+                value = def;
+            }
+            else if (w1 == 1)    
+            {
+                value = deflated[deflatedIndex];
+                deflatedIndex++;
+            }  
+            else if (w1 == 2)
+            {
+                value = Convert.ToUInt32((deflated[deflatedIndex] << 8 )+ deflated[deflatedIndex+1]) ;
+                deflatedIndex+=2;
+            }
+            else if (w1 == 3)
+            {
+                value = Convert.ToUInt32((deflated[deflatedIndex] << 16) + (deflated[deflatedIndex + 1] << 8) + deflated[deflatedIndex+2] );
+                deflatedIndex+=3;
+            }
+            else if (w1 == 4)
+            {
+                value = Convert.ToUInt32((deflated[deflatedIndex] << 24) + (deflated[deflatedIndex + 1] << 16) + (deflated[deflatedIndex + 2] << 8) + deflated[deflatedIndex+3] );
+                deflatedIndex+=4;
+            }
+            else
+            {
+                throw new Exception("xref stream width " + w1 + " not accepted");
+            }
+            return value;
+        }
+
+        private byte[] Flate(byte[] b)
+		{
+            
+            MemoryStream msOut = new MemoryStream();
+            msOut.WriteByte(120);
+            msOut.WriteByte(156);
+       
+            using (MemoryStream originalFileStream = new MemoryStream(b))
+            {
+                using (DeflateStream compressionStream = new DeflateStream(msOut, CompressionMode.Compress))
+                {                    
+                    originalFileStream.CopyTo(compressionStream);
+                }
+            }
+
+            return msOut.ToArray();
+
+		}
+
+        private byte[] Deflate(byte[] b, int predictor, int finalColumnCount)
+		{
+            byte[] result;
+            using (MemoryStream msOut = new MemoryStream())
+            {
+                using (MemoryStream inputStream = new MemoryStream(b))
+                {
+                    inputStream.ReadByte();
+                    inputStream.ReadByte();
+
+                    using (DeflateStream gzip = new DeflateStream(inputStream, CompressionMode.Decompress))
+                    {
+                        gzip.CopyTo(msOut);                    
+                    }
+                }
+
+                result = msOut.ToArray();
+            }
+
+            if (predictor == 1)
+                return result;
+            else if (predictor > 10)
+            {       
+                int deflatedColumnCount = finalColumnCount + 1;
+                int rowsCount = result.Length / deflatedColumnCount;    
+                if (rowsCount * (finalColumnCount + 1) != result.Length)
+                    throw new Exception("decompressed stream length are not correct to use png filter");
+
+                byte[] finalResult = new byte[rowsCount*finalColumnCount];
+                // https://stackoverflow.com/questions/23813941/reading-a-pdf-version-1-5-how-to-handle-cross-reference-stream-dictionary
+                // https://www.w3.org/TR/PNG-Filters.html
+                // byte[] forms a bidimensional array, width is worBytesWidth
+                // first byte is a filter:
+                // 0: None    |0|123  => 123
+                // 1: sub     not implemented
+                // 2: Up:     |2|123  => 246
+                // 3: Average not implemented
+                // 4: Paeth   not implemented
+
+                
+                    int rowIndex = 0;
+                    while (rowIndex < rowsCount)
+                    {                        
+                        switch (result[rowIndex * deflatedColumnCount])                        
+                        {
+                            case 0:
+                                for (int j = 0; j < finalColumnCount; j++)
+                                {
+                                    finalResult[rowIndex * finalColumnCount + j] = result[rowIndex * deflatedColumnCount + j + 1];
+                                }                                
+                                break;
+                            case 2:
+                                for (int j = 0; j < finalColumnCount; j++)
+                                {                                    
+                                    int value;
+                                    if (rowIndex == 0)
+                                    {
+                                        value  = result[rowIndex * deflatedColumnCount+j+1];
+                                    }
+                                    else
+                                    {
+                                        value  = result[rowIndex * deflatedColumnCount+j+1] + finalResult[(rowIndex-1) * finalColumnCount+j];
+                                    }
+                                    finalResult[rowIndex * finalColumnCount + j] = (byte)(value % 256);
+                                }
+                                break;
+                            default:
+                                throw new Exception("decompress filter " + result[rowIndex * deflatedColumnCount] + " not implemented");
+                        }
+
+                        rowIndex++;
+                    }
+
+                    return finalResult;
+            }
+            else
+            {
+                throw new Exception("predictor decompress not allowed");
+            }            
+        }
+
+        private int ReadXrefTable(byte[] pdf, string[] parts, int xrefStartPointer, Dictionary<int, XrefItem> Xref)
         {
             // el array de partes es mas grande, cada elemento es una posición
             // 0 6  <- position apunta al 0
@@ -460,25 +917,34 @@ namespace JoinPDF
             // 0000000409 00000 n
             int count = 0;
 
+            int kk;
+            if (!Int32.TryParse(parts[xrefStartPointer], NumberStyles.None, CultureInfo.InvariantCulture, out kk))
+                return parts.Length;
+
             for (int xrefIndex = Convert.ToInt32(parts[xrefStartPointer]); 
                 xrefIndex < Convert.ToInt32(parts[xrefStartPointer+1]); 
                 xrefIndex++)
             {
-                XrefItem item = new XrefItem() {
-                    id = xrefIndex,
-                    pos = Convert.ToUInt32(parts[xrefStartPointer + 2 + count * 3]),
-                        // iteration is ignored, the new pdf will have 0 iteration
-                    IsUsed =  parts[xrefStartPointer + 4 + count * 3] == "n" ? true : false
-                };
+                uint offset = Convert.ToUInt32(parts[xrefStartPointer + 2 + count * 3]);
+                bool IsUsed =  parts[xrefStartPointer + 4 + count * 3] == "n" ? true : false;
 
-                if (item.IsUsed)
-                    Xref.Add(xrefIndex, item);
+                if (IsUsed)
+                {
+                    XrefItem item = new XrefItem() {
+                        id = GetReferenceNumberForward(pdf, offset),
+                        pos = offset,
+                            // iteration is ignored, the new pdf will have 0 iteration
+                        IsUsed =  parts[xrefStartPointer + 4 + count * 3] == "n" ? true : false
+                    };
 
+                    Xref.Add(item.id, item);
+                }
                 count++;
             }
 
             return xrefStartPointer + 2 + count * 3;
         }
+
 
         private string GetString(byte[] pdf, uint startByte, uint endByte)
         {

@@ -17,17 +17,9 @@ using System.Collections.Generic;
 
 namespace JoinPDF
 {
-    public class XrefItem
+    public class StmObjSubItem
     {
-        public int id;
-        public int newId;
-        public List<int> stmobjUsed = new List<int>();
-
-        public uint pos;
-        public bool IsUsed;
-        public byte[] content;        
-        public List<string> text = new List<string>();
-        public List<string> newText = new List<string>();
-        public byte[] streamContent;
+        public int StmObjId;
+        public int Position;
     }
 }
