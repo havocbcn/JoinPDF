@@ -374,7 +374,7 @@ namespace JoinPDF
             foreach (KeyValuePair <int, XrefItem> item in dctXref1)
             {
                 if (item.Value.IsUsed)
-                    ReadContent(pdf1, item, newItems);
+                    ReadContent(pdf1, item.Value, newItems, dctXref1);
             }
 
             foreach (XrefItem newItem in newItems)
@@ -383,14 +383,18 @@ namespace JoinPDF
             }
         }
 
-        private void ReadContent(byte[] pdf, KeyValuePair<int, XrefItem> item, List<XrefItem> newItems)
+        private void ReadContent(byte[] pdf, XrefItem item, List<XrefItem> newItems, Dictionary<int, XrefItem> dctXref1)
         {
             // |--TEXT--||- optional binary-||--TEXT-..-|            
             // OBJ.......STREAM......ENDSTREM.TEXT.ENDOBJ
-            uint startIndex = item.Value.pos;
+            uint startIndex = item.pos;
             uint startTextIndex = startIndex;
             uint currentIndex = startIndex;            
             bool continueWorking = true;
+
+            // already read
+            if (item.text.Count > 0)
+                return;
 
             while (continueWorking)
             {
@@ -404,7 +408,7 @@ namespace JoinPDF
                 {
                     currentIndex += 6;                    
 
-                    item.Value.text.Add(GetString(pdf, startTextIndex, currentIndex));                    
+                    item.text.Add(GetString(pdf, startTextIndex, currentIndex));                    
 
                     uint startStream = currentIndex;
 
@@ -421,7 +425,28 @@ namespace JoinPDF
                     {
                         if (parts[i].ToLower() == "length")
                         {
-                            streamLength = Convert.ToUInt32(parts[i+1]);
+                            // easy: /Length 1234 => 1234 bytes
+                            // hard: /Length 3 0 R => Look in object 3, to obtain the 1234
+                            if (i + 3 < parts.Length && parts[i+2] == "0" && parts[i+3] == "R")
+                            {
+                                int lengthPointer = Convert.ToInt32(parts[i+1]);
+
+                                ReadContent(pdf, dctXref1[lengthPointer], newItems, dctXref1); 
+
+                                if (dctXref1[lengthPointer].text.Count != 1)
+                                {
+                                    throw new Exception("Length points to an object that is not a number");
+                                }
+
+                                string[] partsLength = dctXref1[lengthPointer].text[0].Split(separator, StringSplitOptions.RemoveEmptyEntries);
+
+                                // 3 0 Obj 1234 endobj
+                                streamLength = Convert.ToUInt32(partsLength[3]);
+                            }
+                            else
+                            {
+                                streamLength = Convert.ToUInt32(parts[i+1]);
+                            }
                             break;
                         }
 
@@ -431,10 +456,10 @@ namespace JoinPDF
                     if (streamLength == null)
                         throw new Exception("stream without length definition");
 
-                    uint endStream = startStream + streamLength.Value + 1;
+                    uint endStream = startStream + (streamLength ?? 0)+ 1;
                     startTextIndex = endStream;
                     currentIndex = endStream + 9;   // 9 = endstream text length
-                    item.Value.streamContent = pdf.Slice(startStream, endStream);
+                    item.streamContent = pdf.Slice(startStream, endStream);
                 }
 
                 if (currentIndex + 5 < pdf.Length &&
@@ -455,7 +480,7 @@ namespace JoinPDF
                     continueWorking = false;
             }
 
-            item.Value.text.Add(GetString(pdf, startTextIndex, currentIndex));
+            item.text.Add(GetString(pdf, startTextIndex, currentIndex));
 
 
             // ObjStm
@@ -466,11 +491,11 @@ namespace JoinPDF
             // << obj2 >>
             // ...
             // endstream endobj
-            if (item.Value.text[0].Contains("/ObjStm"))
+            if (item.text[0].Contains("/ObjStm"))
             {
-                item.Value.IsUsed = false;
+                item.IsUsed = false;
 
-                string[] partsXrefStream = item.Value.text[0].Split(separator, StringSplitOptions.RemoveEmptyEntries);
+                string[] partsXrefStream = item.text[0].Split(separator, StringSplitOptions.RemoveEmptyEntries);
                 int i = 0;
                 uint? streamLength = null;
                 uint FirstElementOffset = 0;
@@ -507,11 +532,11 @@ namespace JoinPDF
                 }
 
                 
-                byte[] deflated = Deflate(item.Value.streamContent, 1 ,0);
+                byte[] deflated = Deflate(item.streamContent, 1 ,0);
                 string preamble = GetString(deflated, 0, FirstElementOffset);
                 string[] preambleParts = preamble.Split(separator, StringSplitOptions.RemoveEmptyEntries);
 
-                foreach (int subitemUsed in item.Value.stmobjUsed)
+                foreach (int subitemUsed in item.stmobjUsed)
                 {
                     uint offset = Convert.ToUInt32(preambleParts[subitemUsed*2+1]) + FirstElementOffset;
                     uint offsetContinuous;
@@ -529,8 +554,7 @@ namespace JoinPDF
                     
                     newItems.Add(newItem);
 
-                    ReadContent(deflated.Slice(offset, offsetContinuous), new KeyValuePair<int, XrefItem>(
-                        objectIndex, newItem), newItems);
+                    ReadContent(deflated.Slice(offset, offsetContinuous), newItem, newItems, dctXref1);
 
                     newItem.text[0] = objectIndex.ToString() + " 0 obj\n" + newItem.text[0] + "\nendobj";
                 }
