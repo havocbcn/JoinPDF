@@ -168,14 +168,14 @@ namespace JoinPDF
             int kidsIndex1 = pages1Content.ToLower().IndexOf("kids");
             int startPages1Content = pages1Content.IndexOf("[", kidsIndex1) + 1;
             int endPages1Content = pages1Content.IndexOf("]", startPages1Content);
-            string content1 = pages1Content.Substring(startPages1Content, endPages1Content - startPages1Content);
+            string content1 = pages1Content.Substring(startPages1Content, endPages1Content - startPages1Content).Trim();
             int numPages1 = content1.Split('R', StringSplitOptions.RemoveEmptyEntries).Length;
 
             string pages2Content = XRef2[page2Index].newText[0];
             int kidsIndex2 = pages2Content.ToLower().IndexOf("kids");
             int startPages2Content = pages2Content.IndexOf("[", kidsIndex2) + 1;
             int endPages2Content = pages2Content.IndexOf("]", startPages2Content);
-            string content2 = pages2Content.Substring(startPages2Content, endPages2Content - startPages2Content);
+            string content2 = pages2Content.Substring(startPages2Content, endPages2Content - startPages2Content).Trim();
             int numPages2 = content2.Split('R', StringSplitOptions.RemoveEmptyEntries).Length;
             
             string newContent = XRef1[page1Index].newId + " 0 obj <</Kids[" + content1 + " " + content2 + "] /Count " + (numPages1 + numPages2) + " /Type/Pages>> endobj";
